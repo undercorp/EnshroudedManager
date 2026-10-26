@@ -1,0 +1,22 @@
+<Configuration>
+  <!-- End-to-end test on a clean Windows: double-click this file (Windows Sandbox must be enabled).
+       Adjust the two HostFolder paths to where you cloned the repository.
+       The installer from dist\ is run silently and test-sandbox.ps1 writes its report to installer\sandbox\report\. -->
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>D:\Claude\EnshroudedManager\dist</HostFolder>
+      <SandboxFolder>C:\Test\dist</SandboxFolder>
+      <ReadOnly>true</ReadOnly>
+    </MappedFolder>
+    <MappedFolder>
+      <HostFolder>D:\Claude\EnshroudedManager\installer\sandbox</HostFolder>
+      <SandboxFolder>C:\Test\sandbox</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <Networking>Enable</Networking>
+  <MemoryInMB>8192</MemoryInMB>
+  <LogonCommand>
+    <Command>powershell.exe -ExecutionPolicy Bypass -File C:\Test\sandbox\test-sandbox.ps1</Command>
+  </LogonCommand>
+</Configuration>

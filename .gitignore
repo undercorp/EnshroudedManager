@@ -1,0 +1,10 @@
+bin/
+obj/
+publish/
+dist/
+.vs/
+*.user
+# runtime data created next to the service when run from the build output
+data/
+steamcmd/
+installer/sandbox/report/

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Enshrouded Manager</title>
+  <link rel="icon" type="image/png" href="icon.png">
+  <link rel="apple-touch-icon" href="icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="login" class="overlay hidden">
+    <form class="card login-card" id="login-form">
+      <div class="brand"><img class="logo" src="icon.png" alt=""> Enshrouded Manager</div>
+      <p id="login-intro">Connexion à l'outil de gestion du serveur.</p>
+      <label>Mot de passe<input type="password" id="login-password" autocomplete="current-password" required></label>
+      <label id="login-confirm-row" class="hidden">Confirmer le mot de passe<input type="password" id="login-confirm" autocomplete="new-password"></label>
+      <div class="error" id="login-error"></div>
+      <button class="btn primary" type="submit" id="login-submit">Se connecter</button>
+    </form>
+  </div>
+
+  <header>
+    <div class="brand"><img class="logo" src="icon.png" alt=""> <span id="server-name">Enshrouded</span></div>
+    <span class="pill" id="state-pill">…</span>
+    <span class="busy hidden" id="busy"></span>
+    <progress class="hidden" id="progress" max="100"></progress>
+    <nav id="tabs">
+      <button data-tab="dashboard" class="active">Tableau de bord</button>
+      <button data-tab="config">Paramètres</button>
+      <button data-tab="backups">Sauvegardes</button>
+      <button data-tab="logs">Journal</button>
+      <button data-tab="tool">Outil</button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="tab-dashboard" class="tab">
+      <div class="grid stats">
+        <div class="card stat"><div class="k">État</div><div class="v" id="s-state">—</div><div class="sub" id="s-uptime"></div></div>
+        <div class="card stat"><div class="k">Joueurs</div><div class="v" id="s-players">—</div><div class="sub" id="s-mem"></div></div>
+        <div class="card stat"><div class="k">Version installée</div><div class="v" id="s-local">—</div><div class="sub" id="s-remote"></div></div>
+        <div class="card stat"><div class="k">Mises à jour</div><div class="v" id="s-auto">—</div><div class="sub" id="s-check"></div></div>
+      </div>
+      <div class="card">
+        <h2>Actions</h2>
+        <div class="actions">
+          <button class="btn" data-action="server/start">Démarrer</button>
+          <button class="btn" data-action="server/stop" data-confirm="Arrêter le serveur ? Les joueurs connectés seront déconnectés.">Arrêter</button>
+          <button class="btn" data-action="server/restart" data-confirm="Redémarrer le serveur ? Les joueurs connectés seront déconnectés.">Redémarrer</button>
+          <button class="btn" data-action="update/check">Vérifier les mises à jour</button>
+          <button class="btn warn" data-action="update/run" data-confirm="Forcer la mise à jour maintenant ? Le serveur sera arrêté, sauvegardé, mis à jour (validation des fichiers) puis relancé.">Mettre à jour maintenant</button>
+          <button class="btn" data-action="backups">Sauvegarder maintenant</button>
+        </div>
+        <div class="result" id="action-result"></div>
+      </div>
+      <div class="card">
+        <h2>Derniers événements</h2>
+        <div class="log small" id="recent-log"></div>
+      </div>
+    </section>
+
+    <section id="tab-config" class="tab hidden">
+      <div class="banner hidden" id="config-changed">Les paramètres ont été modifiés ailleurs (application bureau ou autre navigateur). <button class="link" id="config-reload">Recharger</button></div>
+      <div class="config-layout">
+        <aside id="config-nav"></aside>
+        <div id="config-form"></div>
+      </div>
+      <div class="savebar hidden" id="savebar">
+        <span>Modifications non enregistrées</span>
+        <button class="btn" id="config-cancel">Annuler</button>
+        <button class="btn primary" id="config-apply">Appliquer et redémarrer</button>
+      </div>
+    </section>
+
+    <section id="tab-backups" class="tab hidden">
+      <div class="card">
+        <h2>Sauvegardes du monde</h2>
+        <p class="muted">Une sauvegarde est faite automatiquement avant chaque mise à jour, chaque modification des paramètres et chaque restauration. Chaque archive contient le dossier savegame et enshrouded_server.json.</p>
+        <div class="actions"><button class="btn" data-action="backups">Sauvegarder maintenant</button></div>
+        <table class="table"><thead><tr><th>Date</th><th>Motif</th><th>Taille</th><th></th></tr></thead><tbody id="backup-list"></tbody></table>
+      </div>
+    </section>
+
+    <section id="tab-logs" class="tab hidden">
+      <div class="card">
+        <h2>Journal de l'outil</h2>
+        <div class="log" id="full-log"></div>
+      </div>
+    </section>
+
+    <section id="tab-tool" class="tab hidden">
+      <form class="card" id="settings-form">
+        <h2>Réglages de l'outil</h2>
+        <label class="row"><span>Mise à jour automatique</span><input type="checkbox" id="set-autoupdate"></label>
+        <label class="row"><span>Vérifier toutes les (minutes)</span><input type="number" id="set-interval" min="1" max="1440"></label>
+        <label class="row"><span>Relancer le serveur s'il plante</span><input type="checkbox" id="set-autorestart"></label>
+        <label class="row"><span>Nombre de sauvegardes à garder</span><input type="number" id="set-keep" min="3" max="500"></label>
+        <label class="row"><span>Langue</span><select id="set-lang"><option value="fr">Français</option><option value="en">English</option></select></label>
+        <div class="actions"><button class="btn primary" type="submit">Enregistrer</button></div>
+        <div class="result" id="settings-result"></div>
+      </form>
+      <form class="card" id="password-form">
+        <h2>Mot de passe de l'interface</h2>
+        <label class="row"><span>Mot de passe actuel</span><input type="password" id="pw-current" required autocomplete="current-password"></label>
+        <label class="row"><span>Nouveau mot de passe</span><input type="password" id="pw-new" required minlength="8" autocomplete="new-password"></label>
+        <div class="actions"><button class="btn" type="submit">Changer</button> <button class="btn" type="button" id="logout">Se déconnecter</button></div>
+        <div class="result" id="password-result"></div>
+      </form>
+    </section>
+  </main>
+
+  <dialog id="dialog">
+    <form method="dialog">
+      <h3 id="dialog-title"></h3>
+      <div id="dialog-body"></div>
+      <div class="actions right"><button class="btn" value="cancel" id="dialog-cancel">Annuler</button><button class="btn primary" value="ok" id="dialog-ok">Confirmer</button></div>
+    </form>
+  </dialog>
+
+  <script src="i18n.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
