@@ -55,6 +55,36 @@ const EN = {
   "Restaurer aussi les paramètres (enshrouded_server.json)": "Also restore the settings (enshrouded_server.json)",
   "Mot de passe changé. Les autres sessions (navigateurs, application bureau) sont déconnectées.":
     "Password changed. Other sessions (browsers, desktop app) have been signed out.",
+  // instances & resource depot
+  "Dépôt": "Depot", "Monde modèle": "Master world", "Dernier reset": "Last reset", "Prochain reset": "Next reset",
+  "Dépôt de ressources": "Resource depot",
+  "Le monde est remis à l'identique du monde modèle à intervalle régulier : les visiteurs peuvent vider les coffres, tout revient au reset suivant.":
+    "The world is put back to the master world at regular intervals: visitors can empty the chests, everything comes back at the next reset.",
+  "Reset maintenant": "Reset now", "Définir le monde actuel comme modèle": "Set the current world as master",
+  "Importer un monde (.zip)": "Import a world (.zip)",
+  "Archive acceptée : le dossier savegame d'un serveur (world0.ksd) ou les fichiers d'un monde solo (Steam\\userdata\\…\\1203620\\remote). Un seul monde par archive.":
+    "Accepted archive: the savegame folder of a server (world0.ksd) or the files of a solo world (Steam\\userdata\\…\\1203620\\remote). One world per archive.",
+  "Réglages du dépôt": "Depot settings", "Reset automatique": "Automatic reset", "Toutes les (minutes)": "Every (minutes)",
+  "Seulement si personne n'est connecté": "Only when nobody is online",
+  "Reset automatique désactivé": "Automatic reset disabled", "Présent": "Present", "Aucun": "None",
+  "Importez un monde ou définissez le monde actuel comme modèle.": "Import a world or set the current world as master.",
+  "Remettre le monde modèle maintenant ? Les joueurs connectés seront déconnectés.": "Put the master world back now? Connected players will be disconnected.",
+  "Le monde actuel remplacera le monde modèle (le serveur redémarre). Continuer ?": "The current world will replace the master world (the server restarts). Continue?",
+  "Importer « {0} » comme monde modèle ? Le monde actuel du dépôt sera remplacé.": "Import “{0}” as master world? The current depot world will be replaced.",
+  "Instances": "Instances",
+  "Chaque instance est un serveur Enshrouded séparé (dossier, monde, port et réglages propres), mis à jour en même temps que les autres.":
+    "Each instance is a separate Enshrouded server (its own folder, world, port and settings), updated together with the others.",
+  "Nom": "Name", "Port": "Port", "Dossier": "Folder", "Ajouter une instance": "Add an instance", "Dossier du serveur": "Server folder",
+  "Port de requête (UDP)": "Query port (UDP)", "Joueurs max": "Max players", "Mot de passe administrateur": "Admin password",
+  "Mot de passe visiteurs (vide = public)": "Visitor password (empty = public)", "Mode dépôt de ressources": "Resource depot mode",
+  "Reset toutes les (minutes)": "Reset every (minutes)",
+  "Le serveur (environ 8 Go) est téléchargé depuis Steam dans ce dossier, puis démarré. Pensez à rediriger le port UDP sur votre box.":
+    "The server (about 8 GB) is downloaded from Steam into this folder, then started. Remember to forward the UDP port on your router.",
+  "Créer l'instance": "Create the instance", "Créer l'instance ?": "Create the instance?",
+  "Le serveur sera téléchargé dans {0} puis démarré sur le port UDP {1}.": "The server will be downloaded to {0} then started on UDP port {1}.",
+  "Instance créée : le téléchargement du serveur commence.": "Instance created: the server download is starting.",
+  "Supprimer « {0} » ?": "Delete “{0}”?", "Le serveur de cette instance est arrêté et retiré de l'outil.": "This instance's server is stopped and removed from the tool.",
+  "Supprimer aussi ses fichiers, monde compris ({0})": "Also delete its files, world included ({0})",
   "Le serveur n'est pas encore installé : les paramètres seront disponibles à la fin du téléchargement.":
     "The server is not installed yet: settings will be available once the download is finished.",
 };

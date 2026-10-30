@@ -15,12 +15,23 @@ const el = (tag, props = {}, ...children) => {
 
 let token = null;
 try { token = localStorage.getItem("em-token"); } catch { }
+let instanceId = "main";
+try { instanceId = localStorage.getItem("em-instance") || "main"; } catch { }
+
+// Routes that concern the whole tool; every other one acts on the selected instance.
+const GLOBAL_ROUTES = /^(auth\/|settings|instances|logs|update\/check)/;
+
+function withInstance(path) {
+  if (GLOBAL_ROUTES.test(path)) return path;
+  return path + (path.includes("?") ? "&" : "?") + "instance=" + encodeURIComponent(instanceId);
+}
 
 async function api(path, options = {}) {
-  const res = await fetch("/api/" + path, {
+  const raw = options.raw !== undefined; // a File/Blob sent as is (world import)
+  const res = await fetch("/api/" + withInstance(path), {
     method: options.method || "GET",
-    headers: { "Content-Type": "application/json", ...(token ? { Authorization: "Bearer " + token } : {}) },
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    headers: { "Content-Type": raw ? "application/octet-stream" : "application/json", ...(token ? { Authorization: "Bearer " + token } : {}) },
+    body: raw ? options.raw : options.body !== undefined ? JSON.stringify(options.body) : undefined,
   });
   if (res.status === 401 && !path.startsWith("auth/")) { showLogin(); throw new Error(t("Session expirée")); }
   const text = await res.text();
@@ -49,7 +60,7 @@ async function showLogin() {
     ? t("Première connexion : choisis le mot de passe qui protégera l'interface (8 caractères minimum).")
     : t("Connexion à l'outil de gestion du serveur.");
   $("#login-confirm-row").classList.toggle("hidden", !setupMode);
-  $("#login-submit").textContent = setupMode ? t("Définir le mot de passe") : "Se connecter";
+  $("#login-submit").textContent = setupMode ? t("Définir le mot de passe") : t("Se connecter");
   $("#login-password").autocomplete = setupMode ? "new-password" : "current-password";
   $("#login").classList.remove("hidden");
   $("#login-password").focus();
@@ -76,7 +87,8 @@ function showTab(name) {
   $$("#tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
   $$(".tab").forEach(t => t.classList.toggle("hidden", t.id !== "tab-" + name));
   if (name === "backups") loadBackups();
-  if (name === "tool") loadSettings();
+  if (name === "tool") { loadSettings(); loadInstanceDefaults(); }
+  if (name === "depot") loadDepot();
   try { localStorage.setItem("em-tab", name); } catch { }
 }
 $$("#tabs button").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
@@ -111,10 +123,47 @@ let lastLogId = 0;
 let configVersion = null;
 const logLines = [];
 
+let instances = [];
+
+async function refreshInstances() {
+  try { instances = await api("instances"); } catch { return; }
+  if (!instances.some(i => i.id === instanceId)) selectInstance("main");
+  const sel = $("#instance-select");
+  sel.classList.toggle("hidden", instances.length < 2);
+  const wanted = instances.map(i => i.id + "|" + i.name).join(",");
+  if (sel.dataset.list !== wanted) {
+    sel.replaceChildren(...instances.map(i => el("option", { value: i.id }, i.name)));
+    sel.dataset.list = wanted;
+  }
+  sel.value = instanceId;
+  renderInstanceList();
+}
+
+/** Switches every tab to another instance. */
+function selectInstance(id) {
+  if (id === instanceId) return;
+  if (dirty && !confirm(t("Modifications non enregistrées"))) { $("#instance-select").value = instanceId; return; }
+  instanceId = id;
+  try { localStorage.setItem("em-instance", id); } catch { }
+  configVersion = null;
+  setDirty(false);
+  loadConfig();
+  const active = $("#tabs button.active")?.dataset.tab;
+  if (active === "backups") loadBackups();
+  if (active === "depot") loadDepot();
+  refreshStatus();
+}
+$("#instance-select").addEventListener("change", e => selectInstance(e.target.value));
+
 async function refreshStatus() {
+  refreshInstances();
   try { status = await api("status"); } catch { return; }
   const s = status;
+  $('#tabs button[data-tab="depot"]').classList.toggle("hidden", !s.isDepot);
+  if (!s.isDepot && $("#tabs button.active")?.dataset.tab === "depot") showTab("dashboard");
+  if (s.isDepot && $("#tabs button.active")?.dataset.tab === "depot") renderDepotTimes(s);
   $("#server-name").textContent = s.serverName;
+  $$('[data-instance-only]').forEach(e => e.classList.toggle("hidden", !s.isDepot));
   document.title = `${s.serverName} — Enshrouded Manager`;
   const pill = $("#state-pill");
   pill.textContent = s.stateLabel;
@@ -451,3 +500,109 @@ async function start() {
   if (!token) return showLogin();
   try { await api("status"); start(); } catch { }
 })();
+
+/* ---------- resource depot ---------- */
+
+let depot = null;
+
+function renderDepotTimes(s) {
+  $("#d-next").textContent = s.nextReset ? fmtTime(s.nextReset).slice(0, 5) : "—";
+  $("#d-next-sub").textContent = depot && !depot.enabled ? t("Reset automatique désactivé") : "";
+}
+
+async function loadDepot() {
+  depot = await api("depot");
+  $("#d-master").textContent = depot.hasMaster ? t("Présent") : t("Aucun");
+  $("#d-master-time").textContent = depot.masterTime ? fmtDate(depot.masterTime) : t("Importez un monde ou définissez le monde actuel comme modèle.");
+  $("#d-last").textContent = depot.lastReset ? fmtDate(depot.lastReset) : "—";
+  $("#depot-enabled").checked = depot.enabled;
+  $("#depot-every").value = depot.resetEveryMinutes;
+  $("#depot-empty").checked = depot.onlyWhenEmpty;
+  if (status) renderDepotTimes(status);
+}
+
+async function depotAction(path, confirmText, options = { method: "POST" }) {
+  if (confirmText && !(await confirmDialog(t("Dépôt"), confirmText))) return;
+  const out = $("#depot-result");
+  out.className = "result"; out.textContent = t("En cours…");
+  try {
+    const r = await api(path, options);
+    out.className = "result ok"; out.textContent = r.message;
+  } catch (err) { out.className = "result err"; out.textContent = err.message; }
+  loadDepot();
+  refreshStatus();
+}
+
+$("#depot-reset").addEventListener("click", () =>
+  depotAction("depot/reset", t("Remettre le monde modèle maintenant ? Les joueurs connectés seront déconnectés.")));
+$("#depot-from-current").addEventListener("click", () =>
+  depotAction("depot/master/from-current", t("Le monde actuel remplacera le monde modèle (le serveur redémarre). Continuer ?")));
+$("#depot-import").addEventListener("change", e => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (file) depotAction("depot/master/import", t("Importer « {0} » comme monde modèle ? Le monde actuel du dépôt sera remplacé.", file.name), { method: "POST", raw: file });
+});
+$("#depot-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  await depotAction("depot", null, { method: "PUT", body: {
+    enabled: $("#depot-enabled").checked, resetEveryMinutes: Number($("#depot-every").value), onlyWhenEmpty: $("#depot-empty").checked } });
+});
+
+/* ---------- instances ---------- */
+
+function renderInstanceList() {
+  const body = $("#instance-list");
+  if (!body) return;
+  body.replaceChildren(...instances.map(i => el("tr", {},
+    el("td", {}, i.name, i.depot ? el("span", { class: "pill" }, t("Dépôt")) : null, " ", el("span", { class: "pill " + i.state }, i.stateLabel)),
+    el("td", {}, String(i.queryPort)),
+    el("td", { class: "muted" }, i.installDir),
+    el("td", {}, i.isMain ? "" : el("button", { type: "button", class: "btn small", onclick: () => removeInstance(i) }, t("Supprimer"))))));
+}
+
+let defaultsLoaded = false;
+async function loadInstanceDefaults() {
+  if (defaultsLoaded) return;
+  try {
+    const d = await api("instances/defaults");
+    $("#ni-dir").value = d.installDir;
+    $("#ni-port").value = d.queryPort;
+    defaultsLoaded = true;
+  } catch { }
+}
+
+$("#ni-depot").addEventListener("change", e => { $("#ni-every").disabled = $("#ni-empty").disabled = !e.target.checked; });
+
+$("#instance-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const out = $("#instance-result");
+  const body = {
+    name: $("#ni-name").value, installDir: $("#ni-dir").value, queryPort: Number($("#ni-port").value),
+    slotCount: Number($("#ni-slots").value), adminPassword: $("#ni-admin").value, visitorPassword: $("#ni-visitor").value,
+    depot: $("#ni-depot").checked, resetEveryMinutes: Number($("#ni-every").value), onlyWhenEmpty: $("#ni-empty").checked,
+  };
+  if (!(await confirmDialog(t("Créer l'instance ?"), t("Le serveur sera téléchargé dans {0} puis démarré sur le port UDP {1}.", body.installDir, body.queryPort)))) return;
+  out.className = "result"; out.textContent = t("En cours…");
+  try {
+    const r = await api("instances", { method: "POST", body });
+    out.className = "result ok"; out.textContent = t("Instance créée : le téléchargement du serveur commence.");
+    e.target.reset();
+    defaultsLoaded = false;
+    await refreshInstances();
+    selectInstance(r.message);
+    showTab("dashboard");
+  } catch (err) { out.className = "result err"; out.textContent = err.message; }
+});
+
+async function removeInstance(i) {
+  const files = el("input", { type: "checkbox" });
+  const ok = await confirmDialog(t("Supprimer « {0} » ?", i.name), [
+    el("p", {}, t("Le serveur de cette instance est arrêté et retiré de l'outil.")),
+    el("label", { class: "row" }, el("span", {}, t("Supprimer aussi ses fichiers, monde compris ({0})", i.installDir)), files),
+  ], t("Supprimer"));
+  if (!ok) return;
+  const r = await api(`instances/${encodeURIComponent(i.id)}?deleteFiles=${files.checked}`, { method: "DELETE" });
+  await confirmDialog(t("Instances"), r.message, "OK");
+  if (instanceId === i.id) selectInstance("main");
+  refreshInstances();
+}

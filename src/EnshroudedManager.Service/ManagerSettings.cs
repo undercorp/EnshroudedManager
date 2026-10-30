@@ -9,6 +9,35 @@ public class StoredToken
     public DateTimeOffset Expires { get; set; }
 }
 
+/// <summary>Resource depot: the world is put back to a reference copy ("master") on a schedule.</summary>
+public class DepotSettings
+{
+    public bool Enabled { get; set; }
+    public int ResetEveryMinutes { get; set; } = 30;
+    /// <summary>Postpone the reset while players are connected.</summary>
+    public bool OnlyWhenEmpty { get; set; }
+    public DateTimeOffset? LastReset { get; set; }
+}
+
+/// <summary>One dedicated server managed by the tool (its own folder, config, saves and ports).</summary>
+public class InstanceSettings
+{
+    public const string MainId = "main";
+
+    public string Id { get; set; } = MainId;
+    /// <summary>Display name in the interfaces; the in-game name lives in enshrouded_server.json.</summary>
+    public string Name { get; set; } = "";
+    /// <summary>Folder that holds enshrouded_server.exe.</summary>
+    public string InstallDir { get; set; } = "";
+    public bool AutoStart { get; set; } = true;
+    public bool AutoRestart { get; set; } = true;
+    public DepotSettings Depot { get; set; } = new();
+
+    [JsonIgnore] public bool IsMain => Id == MainId;
+    [JsonIgnore] public string ExePath => Path.Combine(InstallDir, "enshrouded_server.exe");
+    [JsonIgnore] public string ConfigPath => Path.Combine(InstallDir, "enshrouded_server.json");
+}
+
 /// <summary>Settings of the manager itself, persisted in data\manager.json.</summary>
 public class ManagerSettings
 {
@@ -19,7 +48,7 @@ public class ManagerSettings
 
     public string Language { get; set; } = Shared.L.Default();
 
-    /// <summary>Folder that holds enshrouded_server.exe. Empty until the installer sets it.</summary>
+    /// <summary>Folder of the main instance. Kept at the top level for the installer and for files written by version 1.0.</summary>
     public string InstallDir { get; set; } = "";
 
     /// <summary>steamcmd.exe; downloaded there automatically when missing.</summary>
@@ -29,6 +58,7 @@ public class ManagerSettings
     public string Branch { get; set; } = "public";
     public int CheckIntervalMinutes { get; set; } = 10;
     public bool AutoUpdate { get; set; } = true;
+    // Read from files written by version 1.0 only; moved into the main instance.
     public bool AutoStart { get; set; } = true;
     public bool AutoRestart { get; set; } = true;
     public int BackupsToKeep { get; set; } = 20;
@@ -37,8 +67,17 @@ public class ManagerSettings
     public List<StoredToken> Tokens { get; set; } = new();
     public DateTimeOffset? LastUpdate { get; set; }
 
-    [JsonIgnore] public string ExePath => Path.Combine(InstallDir, "enshrouded_server.exe");
-    [JsonIgnore] public string ConfigPath => Path.Combine(InstallDir, "enshrouded_server.json");
+    public List<InstanceSettings> Instances { get; set; } = new();
+
+    [JsonIgnore] public InstanceSettings Main => Instances.First(i => i.IsMain);
+
+    /// <summary>Version 1.0 had a single server described by the top-level fields.</summary>
+    public void Normalize()
+    {
+        if (!Instances.Any(i => i.IsMain))
+            Instances.Insert(0, new InstanceSettings { InstallDir = InstallDir, AutoStart = AutoStart, AutoRestart = AutoRestart });
+        InstallDir = Main.InstallDir;
+    }
 }
 
 public class SettingsStore
@@ -58,6 +97,7 @@ public class SettingsStore
         Current = File.Exists(FilePath)
             ? JsonSerializer.Deserialize<ManagerSettings>(File.ReadAllText(FilePath)) ?? new()
             : new ManagerSettings();
+        Current.Normalize();
         Shared.L.Set(Current.Language);
         Save();
     }
@@ -67,6 +107,7 @@ public class SettingsStore
         lock (_lock)
         {
             change(Current);
+            Current.Normalize();
             Shared.L.Set(Current.Language);
             Save();
         }

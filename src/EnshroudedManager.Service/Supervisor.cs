@@ -1,64 +1,76 @@
-using System.Text.Json.Nodes;
+using System.Net.NetworkInformation;
+using System.Text.RegularExpressions;
 using EnshroudedManager.Shared;
 
 namespace EnshroudedManager.Service;
 
 /// <summary>
-/// Installs the server on first run, runs the update loop and serialises every operation that touches
-/// the server (install, start, stop, update, config change, restore) so they never overlap.
+/// Owns the instances: installs them, checks Steam for updates and updates every instance, triggers depot
+/// resets and reads player counts.
 /// </summary>
 public class Supervisor : BackgroundService
 {
     private readonly SettingsStore _settings;
     private readonly LogBuffer _log;
-    private readonly GameServer _server;
     private readonly SteamCmd _steam;
-    private readonly ConfigStore _config;
-    private readonly BackupStore _backups;
     private readonly Provisioner _provisioner;
-    private readonly SemaphoreSlim _op = new(1, 1);
-    private readonly Queue<DateTimeOffset> _crashes = new();
+    private readonly Dictionary<string, InstanceRunner> _runners = new();
+    private readonly object _lock = new();
+    private readonly CancellationTokenSource _stoppingSource = new();
     private CancellationTokenSource _wake = new();
-    private CancellationToken _stopping;
-    private bool _warnedNotConfigured;
-    private bool _stoppedByUser; // a manual stop must not be undone by the next check
 
-    public string? Busy { get; private set; }
-    public double? Progress { get; private set; }
     public string? RemoteBuild { get; private set; }
     public DateTimeOffset? LastCheck { get; private set; }
     public DateTimeOffset? NextCheck { get; private set; }
-    public PlayersDto? Players { get; private set; }
 
-    public Supervisor(SettingsStore settings, LogBuffer log, GameServer server, SteamCmd steam, ConfigStore config,
-        BackupStore backups, Provisioner provisioner)
+    public Supervisor(SettingsStore settings, LogBuffer log, SteamCmd steam, Provisioner provisioner)
     {
         _settings = settings;
         _log = log;
-        _server = server;
         _steam = steam;
-        _config = config;
-        _backups = backups;
         _provisioner = provisioner;
-        _server.Crashed += _ => Task.Run(OnCrashAsync);
+        foreach (var s in settings.Current.Instances) AddRunner(s.Id);
     }
 
     private ManagerSettings S => _settings.Current;
+    private CancellationToken Stopping => _stoppingSource.Token;
+
+    private InstanceRunner AddRunner(string id)
+    {
+        var runner = new InstanceRunner(new Instance(_settings, _log, id), _steam, _provisioner, Stopping);
+        lock (_lock) _runners[id] = runner;
+        return runner;
+    }
+
+    public IReadOnlyList<InstanceRunner> Runners
+    {
+        get
+        {
+            lock (_lock)
+                return S.Instances.Select(s => _runners.GetValueOrDefault(s.Id)).OfType<InstanceRunner>().ToList();
+        }
+    }
+
+    public InstanceRunner? Get(string? id)
+    {
+        lock (_lock) return _runners.GetValueOrDefault(string.IsNullOrEmpty(id) ? InstanceSettings.MainId : id);
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _stopping = stoppingToken;
+        stoppingToken.Register(_stoppingSource.Cancel);
         _log.Info(L.T("EnshroudedManager démarré.", "EnshroudedManager started."));
-        if (_provisioner.ServerInstalled) _server.TryAdopt();
+        foreach (var r in Runners.Where(r => r.I.Installed)) r.I.Server.TryAdopt();
 
-        _ = Task.Run(() => PollPlayersAsync(stoppingToken), stoppingToken);
+        _ = Task.Run(() => TickLoopAsync(stoppingToken), stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var ready = await EnsureReadyAsync();
-            if (ready) await CheckAndUpdateAsync(auto: true);
+            var ready = true;
+            foreach (var r in Runners) ready &= await r.EnsureReadyAsync();
+            if (Runners.Any(r => r.I.Installed)) await CheckAndUpdateAsync(auto: true);
             // A failed first install is retried soon; afterwards the normal check interval applies.
-            var wait = ready || !_provisioner.Configured ? TimeSpan.FromMinutes(Math.Max(1, S.CheckIntervalMinutes)) : TimeSpan.FromMinutes(2);
+            var wait = ready ? TimeSpan.FromMinutes(Math.Max(1, S.CheckIntervalMinutes)) : TimeSpan.FromMinutes(2);
             NextCheck = DateTimeOffset.Now + wait;
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, _wake.Token);
             try { await Task.Delay(wait, linked.Token); }
@@ -67,79 +79,41 @@ public class Supervisor : BackgroundService
         }
     }
 
-    /// <summary>steamcmd, server files, firewall, then start. Returns true when the server is installed.</summary>
-    private async Task<bool> EnsureReadyAsync()
-    {
-        if (!_provisioner.Configured)
-        {
-            if (!_warnedNotConfigured)
-                _log.Warn(L.T("Dossier du serveur non configuré : relancez l'installeur.", "Server folder not configured: run the installer again."));
-            _warnedNotConfigured = true;
-            return false;
-        }
-
-        if (!_provisioner.ServerInstalled)
-        {
-            var installed = false;
-            await RunOp(L.T("Installation du serveur", "Server installation"), async () =>
-            {
-                _server.SetState(ServerState.Installing);
-                try
-                {
-                    void Report(string text, double? pct) { Busy = text; Progress = pct; }
-                    await _provisioner.EnsureSteamCmdAsync(Report, _stopping);
-                    installed = await _provisioner.InstallServerAsync(Report, _stopping);
-                }
-                finally
-                {
-                    Progress = null;
-                    _server.SetState(ServerState.Stopped);
-                }
-                return "";
-            });
-            if (!installed) return false;
-        }
-        else
-        {
-            try { await _provisioner.EnsureSteamCmdAsync((t, _) => Busy = t, _stopping); }
-            catch (Exception ex) { _log.Warn("SteamCMD : " + ex.Message); }
-        }
-
-        _provisioner.EnsureFirewall();
-        if (S.AutoStart && !_stoppedByUser && !_server.IsRunning && _server.State is ServerState.Stopped)
-            await RunOp(L.T("Démarrage", "Starting"), () => { _server.Start(); return Task.FromResult(""); });
-        return true;
-    }
-
-    /// <summary>Restarts the wait so a new check interval takes effect immediately.</summary>
+    /// <summary>Restarts the wait: a new check interval or a new instance is taken into account at once.</summary>
     public void Reschedule() => _wake.Cancel();
 
-    public override async Task StopAsync(CancellationToken cancellationToken)
-    {
-        // The service stopping (reboot, manual stop) must not leave the world unsaved.
-        await _op.WaitAsync(TimeSpan.FromSeconds(10));
-        try { await _server.StopAsync(); } catch { }
-        await base.StopAsync(cancellationToken);
-    }
-
-    private async Task PollPlayersAsync(CancellationToken ct)
+    /// <summary>Player counts every 15 s, depot schedules every 15 s.</summary>
+    private async Task TickLoopAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
-            Players = _server.IsRunning ? await SteamQuery.GetPlayersAsync(_config.QueryPort(), ct) : null;
+            foreach (var r in Runners)
+            {
+                try
+                {
+                    r.Players = r.I.Server.IsRunning ? await SteamQuery.GetPlayersAsync(r.I.Config.QueryPort(), ct) : null;
+                    await r.DepotTickAsync();
+                }
+                catch (Exception ex) when (!ct.IsCancellationRequested) { r.I.Log.Warn(ex.Message); }
+            }
             try { await Task.Delay(TimeSpan.FromSeconds(15), ct); } catch { }
         }
     }
 
-    private string NotInstalled() => L.T("Le serveur n'est pas encore installé.", "The server is not installed yet.");
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        // The service stopping (reboot, manual stop) must not leave any world unsaved.
+        await Task.WhenAll(Runners.Select(r => r.ShutdownAsync()));
+        await base.StopAsync(cancellationToken);
+    }
 
+    /// <summary>One Steam check for all instances; each instance out of date is updated in turn.</summary>
     public async Task<string> CheckAndUpdateAsync(bool auto)
     {
-        if (!_provisioner.ServerInstalled) return NotInstalled();
-        string? remote;
+        string remote;
         try
         {
-            remote = await _steam.GetRemoteBuildAsync(_stopping);
+            remote = await _steam.GetRemoteBuildAsync(Stopping);
             RemoteBuild = remote;
             LastCheck = DateTimeOffset.Now;
         }
@@ -149,184 +123,112 @@ public class Supervisor : BackgroundService
             return L.T("Vérification impossible : ", "Check failed: ") + ex.Message;
         }
 
-        var local = _steam.GetLocalBuild();
-        if (local == remote)
+        var outdated = Runners.Where(r => r.I.Installed && r.LocalBuild != remote).ToList();
+        if (outdated.Count == 0)
         {
-            var upToDate = L.T($"Serveur à jour (build {local}).", $"Server up to date (build {local}).");
+            var upToDate = L.T($"Serveur(s) à jour (build {remote}).", $"Server(s) up to date (build {remote}).");
             if (!auto) _log.Info(upToDate);
             return upToDate;
         }
-        var available = L.T($"Mise à jour disponible : build {local ?? "?"} → {remote}.", $"Update available: build {local ?? "?"} → {remote}.");
+        var available = L.T($"Mise à jour disponible : build {outdated[0].LocalBuild ?? "?"} → {remote}.",
+                            $"Update available: build {outdated[0].LocalBuild ?? "?"} → {remote}.");
         if (!auto || !S.AutoUpdate)
         {
             _log.Warn(auto ? available + L.T(" (mise à jour automatique désactivée)", " (automatic updates disabled)") : available);
             return available;
         }
         _log.Event(available);
-        return await UpdateAsync(remote, force: false);
+        var results = new List<string>();
+        foreach (var r in outdated) results.Add(await r.UpdateAsync(remote, force: false));
+        return string.Join(" ", results);
     }
 
-    /// <summary>Stop → backup → steamcmd → start. Aborts before touching the files if the backup fails.</summary>
-    public Task<string> UpdateAsync(string? target, bool force) => RunOp(L.T("Mise à jour", "Update"), async () =>
+    // ---------- instances ----------
+
+    public string? ValidateNewInstance(CreateInstanceDto dto, out string installDir)
     {
-        if (!_provisioner.ServerInstalled) return NotInstalled();
-        var local = _steam.GetLocalBuild();
-        if (!force && target != null && local == target) return L.T($"Déjà à jour (build {local}).", $"Already up to date (build {local}).");
-
-        var wasRunning = _server.IsRunning;
-        _server.SetState(ServerState.Updating);
-        try
+        installDir = "";
+        if (string.IsNullOrWhiteSpace(dto.Name)) return L.T("Donnez un nom à l'instance.", "Give the instance a name.");
+        if (string.IsNullOrWhiteSpace(dto.InstallDir)) return L.T("Choisissez un dossier.", "Choose a folder.");
+        try { installDir = Path.GetFullPath(dto.InstallDir.Trim()); }
+        catch { return L.T("Dossier invalide.", "Invalid folder."); }
+        var dir = installDir;
+        if (S.Instances.Any(i => string.Equals(Path.GetFullPath(i.InstallDir is { Length: > 0 } d ? d : "?"), dir, StringComparison.OrdinalIgnoreCase)))
+            return L.T("Ce dossier est déjà utilisé par une autre instance.", "This folder is already used by another instance.");
+        if (Directory.Exists(dir) && Directory.EnumerateFileSystemEntries(dir).Any() && !File.Exists(Path.Combine(dir, "enshrouded_server.exe")))
+            return L.T("Ce dossier n'est pas vide : choisissez un dossier vide ou un serveur Enshrouded existant.",
+                       "This folder is not empty: choose an empty folder or an existing Enshrouded server.");
+        if (dto.QueryPort is < 1024 or > 65535) return L.T("Port de requête invalide.", "Invalid query port.");
+        if (Runners.Any(r => r.I.Config.QueryPort() == dto.QueryPort))
+            return L.T($"Le port {dto.QueryPort} est déjà utilisé par une autre instance.", $"Port {dto.QueryPort} is already used by another instance.");
+        if (IPGlobalProperties.GetIPGlobalProperties().GetActiveUdpListeners().Any(e => e.Port == dto.QueryPort))
+            return L.T($"Le port UDP {dto.QueryPort} est déjà utilisé sur cette machine.", $"UDP port {dto.QueryPort} is already in use on this machine.");
+        if (dto.SlotCount is < 1 or > 16) return L.T("Joueurs max : entre 1 et 16.", "Max players: between 1 and 16.");
+        if (string.IsNullOrEmpty(dto.AdminPassword)) return L.T("Choisissez un mot de passe administrateur.", "Choose an admin password.");
+        if (dto.AdminPassword == dto.VisitorPassword) return L.T("Le mot de passe admin doit être différent de celui des visiteurs.", "The admin password must differ from the visitor password.");
+        if (dto.Depot && dto.ResetEveryMinutes is < 5 or > 1440) return L.T("Reset : entre 5 et 1440 minutes.", "Reset: between 5 and 1440 minutes.");
+        if (!File.Exists(Path.Combine(dir, "enshrouded_server.exe")))
         {
-            Busy = L.T("Arrêt du serveur", "Stopping the server");
-            await _server.StopAsync();
-
-            Busy = L.T("Sauvegarde", "Backup");
-            try
-            {
-                _backups.Create("avant-maj");
-            }
-            catch (Exception ex)
-            {
-                _log.Error(L.T("Sauvegarde impossible, mise à jour annulée : ", "Backup failed, update cancelled: ") + ex.Message);
-                return L.T("Mise à jour annulée : la sauvegarde a échoué (", "Update cancelled: the backup failed (") + ex.Message + ").";
-            }
-
-            Busy = L.T("Téléchargement de la mise à jour", "Downloading the update");
-            _log.Info(L.T("Mise à jour via steamcmd…", "Updating with steamcmd…"));
-            var ok = await _steam.UpdateAsync(target, _stopping);
-            var now = _steam.GetLocalBuild();
-            if (ok)
-            {
-                _settings.Update(s => s.LastUpdate = DateTimeOffset.Now);
-                _log.Event(L.T($"Mise à jour installée : build {local ?? "?"} → {now}.", $"Update installed: build {local ?? "?"} → {now}."));
-                return L.T($"Mise à jour installée (build {now}).", $"Update installed (build {now}).");
-            }
-            _log.Error(L.T($"La mise à jour a échoué (build local {now ?? "?"}). Le serveur redémarre sur la version actuelle.",
-                           $"The update failed (local build {now ?? "?"}). The server restarts on the current version."));
-            return L.T("La mise à jour a échoué, voir le journal.", "The update failed, see the log.");
+            // A full server takes about 8.2 GB; keep some room for saves and updates.
+            var free = new DriveInfo(Path.GetPathRoot(dir)!).AvailableFreeSpace;
+            if (free < 10L * 1024 * 1024 * 1024)
+                return L.T($"Espace disque insuffisant sur {Path.GetPathRoot(dir)} : {free / 1e9:0.0} Go libres, 10 Go nécessaires.",
+                           $"Not enough disk space on {Path.GetPathRoot(dir)}: {free / 1e9:0.0} GB free, 10 GB needed.");
         }
-        finally
-        {
-            _server.SetState(ServerState.Stopped);
-            if (wasRunning || (S.AutoStart && !_stoppedByUser))
-            {
-                Busy = L.T("Démarrage du serveur", "Starting the server");
-                try { _server.Start(); } catch (Exception ex) { _log.Error(L.T("Démarrage impossible : ", "Could not start: ") + ex.Message); }
-            }
-        }
-    });
-
-    /// <summary>Validates, then stop → backup → write → start.</summary>
-    public async Task<ApplyResultDto> ApplyConfigAsync(JsonObject values, bool restart)
-    {
-        var check = _config.Validate(values, out _);
-        if (!check.Ok) return check;
-
-        string? error = null;
-        await RunOp(L.T("Application des paramètres", "Applying settings"), async () =>
-        {
-            var wasRunning = _server.IsRunning;
-            Busy = L.T("Arrêt du serveur", "Stopping the server");
-            if (restart) await _server.StopAsync();
-            Busy = L.T("Sauvegarde", "Backup");
-            try { _backups.Create("avant-config"); }
-            catch (Exception ex) { error = L.T("Sauvegarde impossible, rien n'a été modifié : ", "Backup failed, nothing was changed: ") + ex.Message; }
-
-            if (error == null)
-            {
-                // Re-validate against the file as it is now (the server may have rewritten it on shutdown).
-                _config.Validate(values, out var root);
-                _config.Write(root);
-                _log.Event(L.T("Paramètres du serveur enregistrés.", "Server settings saved."));
-            }
-            if (restart && (wasRunning || (S.AutoStart && !_stoppedByUser)) && _provisioner.ServerInstalled)
-            {
-                Busy = L.T("Démarrage du serveur", "Starting the server");
-                _server.Start();
-            }
-            return "";
-        });
-        if (error != null) _log.Error(error);
-        return error == null ? check : new ApplyResultDto(false, [error], check.Warnings);
+        return null;
     }
 
-    public Task<string> RestoreAsync(string name, bool includeConfig) => RunOp(L.T("Restauration", "Restore"), async () =>
+    public string CreateInstance(CreateInstanceDto dto, string installDir)
     {
-        _backups.ResolvePath(name);
-        var wasRunning = _server.IsRunning;
-        Busy = L.T("Arrêt du serveur", "Stopping the server");
-        await _server.StopAsync();
-        Busy = L.T("Sauvegarde de l'état actuel", "Backing up the current state");
-        _backups.Create("avant-restauration");
-        Busy = L.T("Restauration", "Restoring");
-        _backups.Restore(name, includeConfig);
-        if (wasRunning || (S.AutoStart && !_stoppedByUser)) { Busy = L.T("Démarrage du serveur", "Starting the server"); _server.Start(); }
-        return L.T("Sauvegarde restaurée.", "Backup restored.");
-    });
-
-    public Task<string> BackupNowAsync() => RunOp(L.T("Sauvegarde", "Backup"), () =>
-        Task.FromResult(L.T("Sauvegarde créée : ", "Backup created: ") + _backups.Create("manuelle").Name));
-
-    public Task<string> StartAsync() => RunOp(L.T("Démarrage", "Starting"), () =>
-    {
-        _stoppedByUser = false;
-        _server.Start();
-        return Task.FromResult(L.T("Serveur démarré.", "Server started."));
-    });
-
-    public Task<string> StopServerAsync() => RunOp(L.T("Arrêt", "Stopping"), async () =>
-    {
-        _stoppedByUser = true;
-        await _server.StopAsync();
-        return L.T("Serveur arrêté.", "Server stopped.");
-    });
-
-    public Task<string> RestartAsync() => RunOp(L.T("Redémarrage", "Restarting"), async () =>
-    {
-        _stoppedByUser = false;
-        await _server.StopAsync();
-        _server.Start();
-        return L.T("Serveur redémarré.", "Server restarted.");
-    });
-
-    private async Task OnCrashAsync()
-    {
-        if (!S.AutoRestart) return;
-        var now = DateTimeOffset.Now;
-        lock (_crashes)
+        var id = Slug(dto.Name);
+        var instance = new InstanceSettings
         {
-            _crashes.Enqueue(now);
-            while (_crashes.Count > 0 && now - _crashes.Peek() > TimeSpan.FromMinutes(15)) _crashes.Dequeue();
-            if (_crashes.Count > 3)
+            Id = id, Name = dto.Name.Trim(), InstallDir = installDir,
+            Depot = new DepotSettings { Enabled = dto.Depot, ResetEveryMinutes = dto.ResetEveryMinutes, OnlyWhenEmpty = dto.OnlyWhenEmpty },
+        };
+        _settings.Update(s => s.Instances.Add(instance));
+        var runner = AddRunner(id);
+
+        Directory.CreateDirectory(installDir);
+        if (!File.Exists(instance.ConfigPath))
+            _provisioner.WriteInitialConfig(instance.ConfigPath, dto.Name, dto.SlotCount, dto.QueryPort, groups =>
             {
-                _log.Error(L.T("Le serveur a planté plus de 3 fois en 15 minutes : redémarrage automatique suspendu.",
-                               "The server crashed more than 3 times in 15 minutes: automatic restart suspended."));
-                return;
-            }
-        }
-        _log.Info(L.T("Redémarrage automatique dans 10 secondes…", "Automatic restart in 10 seconds…"));
-        await Task.Delay(TimeSpan.FromSeconds(10));
-        if (!_server.IsRunning) await StartAsync();
+                if (dto.Depot) Provisioner.DepotGroups(groups, dto.AdminPassword, dto.VisitorPassword);
+                else foreach (var g in groups.OfType<System.Text.Json.Nodes.JsonObject>().Where(g => g["name"]?.ToString() == "Admin")) g["password"] = dto.AdminPassword;
+            });
+        runner.I.Log.Event(L.T($"Instance « {instance.Name} » créée dans {installDir}.", $"Instance “{instance.Name}” created in {installDir}."));
+        Reschedule(); // installs it now
+        return id;
     }
 
-    private async Task<string> RunOp(string name, Func<Task<string>> op)
+    private string Slug(string name)
     {
-        if (!await _op.WaitAsync(TimeSpan.FromSeconds(1)))
-            return L.T($"Une autre opération est en cours ({Busy}).", $"Another operation is in progress ({Busy}).");
-        Busy = name;
-        try
+        var slug = Regex.Replace(name.Normalize(System.Text.NormalizationForm.FormD), @"[^A-Za-z0-9]+", "-").Trim('-').ToLowerInvariant();
+        if (slug is "" or InstanceSettings.MainId) slug = "instance";
+        var id = slug;
+        for (var n = 2; S.Instances.Any(i => i.Id == id); n++) id = $"{slug}-{n}";
+        return id;
+    }
+
+    /// <summary>Stops and forgets an instance. Its server files are only deleted when asked.</summary>
+    public async Task<string> RemoveInstanceAsync(string id, bool deleteFiles)
+    {
+        if (id == InstanceSettings.MainId) return L.T("Le serveur principal ne peut pas être supprimé.", "The main server cannot be removed.");
+        var runner = Get(id);
+        if (runner == null) return L.T("Instance introuvable.", "Instance not found.");
+        await runner.ShutdownAsync();
+        Provisioner.RemoveFirewall(runner.I);
+        var name = runner.I.DisplayName;
+        var dir = runner.I.InstallDir;
+        var dataDir = runner.I.DataDir;
+        lock (_lock) _runners.Remove(id);
+        _settings.Update(s => s.Instances.RemoveAll(i => i.Id == id));
+        if (deleteFiles)
         {
-            return await op();
+            try { if (Directory.Exists(dir)) Directory.Delete(dir, true); } catch (Exception ex) { _log.Warn(ex.Message); }
+            try { if (Directory.Exists(dataDir)) Directory.Delete(dataDir, true); } catch (Exception ex) { _log.Warn(ex.Message); }
         }
-        catch (Exception ex)
-        {
-            _log.Error($"{name} : {ex.Message}");
-            return L.T($"{name} : erreur — {ex.Message}", $"{name}: error — {ex.Message}");
-        }
-        finally
-        {
-            Busy = null;
-            _op.Release();
-        }
+        _log.Event(L.T($"Instance « {name} » supprimée{(deleteFiles ? " avec ses fichiers" : "")}.", $"Instance “{name}” removed{(deleteFiles ? " with its files" : "")}."));
+        return L.T("Instance supprimée.", "Instance removed.");
     }
 }

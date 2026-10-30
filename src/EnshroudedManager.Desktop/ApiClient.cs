@@ -32,6 +32,27 @@ public class ApiClient
 
     public string BaseUrl { get; }
 
+    /// <summary>Instance the per-instance routes act on (same rule as the web page).</summary>
+    public string Instance { get; set; } = "main";
+
+    private static readonly string[] GlobalRoutes = ["auth/", "settings", "instances", "logs", "update/check"];
+
+    private string WithInstance(string path) =>
+        GlobalRoutes.Any(path.StartsWith) ? path : path + (path.Contains('?') ? "&" : "?") + "instance=" + Uri.EscapeDataString(Instance);
+
+    public Task<T> Delete<T>(string path) => Send<T>(HttpMethod.Delete, path, null);
+
+    /// <summary>Sends a file as the raw request body (world import).</summary>
+    public async Task<T> PostFile<T>(string path, string file)
+    {
+        await using var stream = File.OpenRead(file);
+        using var req = new HttpRequestMessage(HttpMethod.Post, WithInstance(path)) { Content = new StreamContent(stream) };
+        req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        using var res = await _http.SendAsync(req);
+        await EnsureOk(res);
+        return (await res.Content.ReadFromJsonAsync<T>(Json))!;
+    }
+
     public string? Token
     {
         get => _http.DefaultRequestHeaders.Authorization?.Parameter;
@@ -44,14 +65,14 @@ public class ApiClient
 
     public async Task<byte[]> GetBytes(string path)
     {
-        using var res = await _http.GetAsync(path);
+        using var res = await _http.GetAsync(WithInstance(path));
         await EnsureOk(res);
         return await res.Content.ReadAsByteArrayAsync();
     }
 
     private async Task<T> Send<T>(HttpMethod method, string path, object? body)
     {
-        using var req = new HttpRequestMessage(method, path);
+        using var req = new HttpRequestMessage(method, WithInstance(path));
         if (body != null) req.Content = JsonContent.Create(body, body.GetType(), options: Json);
         HttpResponseMessage res;
         try { res = await _http.SendAsync(req); }

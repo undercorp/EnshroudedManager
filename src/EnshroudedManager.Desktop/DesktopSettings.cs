@@ -25,6 +25,8 @@ public class DesktopSettings
     }
     public string? ProtectedToken { get; set; }
     public bool NotifyEvents { get; set; } = true;
+    /// <summary>Instance shown last time.</summary>
+    public string Instance { get; set; } = "main";
 
     public string? Token
     {

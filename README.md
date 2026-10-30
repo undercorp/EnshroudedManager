@@ -9,6 +9,8 @@ Install, update and manage an **Enshrouded dedicated server on Windows** — fro
 - **All server settings** of `enshrouded_server.json` (difficulty, player groups and passwords, day length…) in a form. *Apply* validates, backs up, writes and restarts the server. Unknown keys of the file are kept.
 - **Backups** before every update, settings change and restore; restore or download them in one click.
 - **Web and desktop stay in sync**; the desktop app shows Windows notifications for updates and crashes.
+- **Several servers on one machine.** Add instances from the *Tool* tab (own folder, port, world and settings); pick the one to manage in the header. All instances are updated together.
+- **Resource depot mode.** An instance can be a public "resource depot": visitors can empty the chests but not change the bases, and the world is put back to a master copy on a schedule (every 30 min by default). Import the master from a world archive (`world0.ksd`, or a solo world from `Steam\userdata\…\1203620\remote`) or capture the current world.
 - French and English (chosen from the installer language, switchable in the *Tool* tab).
 
 > Not affiliated with Keen Games. Enshrouded is a trademark of Keen Games GmbH.
@@ -62,6 +64,8 @@ Installe, met à jour et gère un **serveur dédié Enshrouded sous Windows**, d
 - **Tous les paramètres** de `enshrouded_server.json` (difficulté, groupes de joueurs et mots de passe, durée du jour…) dans un formulaire. *Appliquer* vérifie, sauvegarde, enregistre et relance le serveur. Les clés inconnues du fichier sont conservées.
 - **Sauvegardes** avant chaque mise à jour, changement de paramètres et restauration ; restauration ou téléchargement en un clic.
 - **Web et bureau synchronisés** ; l'application de bureau affiche des notifications Windows (mises à jour, plantages).
+- **Plusieurs serveurs sur la même machine.** Ajoutez des instances depuis l'onglet *Outil* (dossier, port, monde et réglages propres) et choisissez celle à gérer dans l'en-tête. Toutes sont mises à jour ensemble.
+- **Mode dépôt de ressources.** Une instance peut servir de « dépôt » public : les visiteurs vident les coffres sans pouvoir modifier les bases, et le monde est remis à l'identique d'un monde modèle à intervalle régulier (30 min par défaut). Le modèle s'importe depuis une archive de monde (`world0.ksd`, ou un monde solo de `Steam\userdata\…\1203620\remote`) ou se capture depuis le monde actuel.
 - Français et anglais (selon la langue de l'installeur, modifiable dans l'onglet *Outil*).
 
 > Projet non affilié à Keen Games. Enshrouded est une marque de Keen Games GmbH.

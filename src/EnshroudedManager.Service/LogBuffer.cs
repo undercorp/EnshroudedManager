@@ -2,11 +2,29 @@ using EnshroudedManager.Shared;
 
 namespace EnshroudedManager.Service;
 
+/// <summary>Where components write their messages; instances other than the main one get a name prefix.</summary>
+public interface ILog
+{
+    void Info(string m);
+    void Warn(string m);
+    void Error(string m);
+    void Event(string m);
+}
+
+/// <summary>Writes to the shared log with "[instance name] " in front of every message.</summary>
+public class ScopedLog(LogBuffer inner, Func<string> prefix) : ILog
+{
+    public void Info(string m) => inner.Info(prefix() + m);
+    public void Warn(string m) => inner.Warn(prefix() + m);
+    public void Error(string m) => inner.Error(prefix() + m);
+    public void Event(string m) => inner.Event(prefix() + m);
+}
+
 /// <summary>
 /// Ring buffer of entries, optionally mirrored to a daily file.
 /// Levels: info, warn, error, event (events trigger desktop notifications).
 /// </summary>
-public class LogBuffer
+public class LogBuffer : ILog
 {
     private readonly int _capacity;
     private readonly string? _fileDir;

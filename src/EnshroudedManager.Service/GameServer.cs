@@ -7,8 +7,7 @@ namespace EnshroudedManager.Service;
 /// <summary>Owns the enshrouded_server.exe process: start, graceful stop, crash detection.</summary>
 public class GameServer
 {
-    private readonly SettingsStore _settings;
-    private readonly LogBuffer _log;
+    private readonly Instance _instance;
     private readonly object _lock = new();
     private Process? _process;
     private bool _stopRequested;
@@ -19,11 +18,9 @@ public class GameServer
     /// <summary>Raised when the process exits without being asked to.</summary>
     public event Action<int?>? Crashed;
 
-    public GameServer(SettingsStore settings, LogBuffer log)
-    {
-        _settings = settings;
-        _log = log;
-    }
+    public GameServer(Instance instance) => _instance = instance;
+
+    private ILog _log => _instance.Log;
 
     public int? Pid { get { lock (_lock) return _process is { HasExited: false } p ? p.Id : null; } }
 
@@ -47,7 +44,7 @@ public class GameServer
     /// <summary>Takes control of a server that was already running (started by hand or by a previous manager run).</summary>
     public bool TryAdopt()
     {
-        var exe = Path.GetFullPath(_settings.Current.ExePath);
+        var exe = Path.GetFullPath(_instance.ExePath);
         foreach (var p in Process.GetProcessesByName("enshrouded_server"))
         {
             string? path = null;
@@ -67,13 +64,12 @@ public class GameServer
         lock (_lock)
         {
             if (_process is { HasExited: false }) return;
-            var s = _settings.Current;
-            if (!File.Exists(s.ExePath)) throw new FileNotFoundException(L.T("Exécutable du serveur introuvable", "Server executable not found"), s.ExePath);
+            if (!File.Exists(_instance.ExePath)) throw new FileNotFoundException(L.T("Exécutable du serveur introuvable", "Server executable not found"), _instance.ExePath);
 
             State = ServerState.Starting;
-            var psi = new ProcessStartInfo(s.ExePath)
+            var psi = new ProcessStartInfo(_instance.ExePath)
             {
-                WorkingDirectory = s.InstallDir,
+                WorkingDirectory = _instance.InstallDir,
                 UseShellExecute = false,
                 CreateNoWindow = true, // hidden console: still lets us send Ctrl+C
                 RedirectStandardOutput = true,
@@ -131,7 +127,7 @@ public class GameServer
             _stopRequested = true;
             if (State != ServerState.Updating) State = ServerState.Stopping;
         }
-        var timeout = TimeSpan.FromSeconds(_settings.Current.StopTimeoutSeconds);
+        var timeout = TimeSpan.FromSeconds(_instance.Global.StopTimeoutSeconds);
         _log.Info(L.T("Arrêt du serveur (sauvegarde du monde)…", "Stopping the server (saving the world)…"));
 
         if (SendCtrlC(p.Id))

@@ -148,7 +148,6 @@ Filename: "{app}\Desktop\EnshroudedManager.Desktop.exe"; Description: "{cm:OpenD
 Filename: "{sys}\net.exe"; Parameters: "stop {#ServiceName}"; Flags: runhidden waituntilterminated; RunOnceId: "StopService"
 Filename: "{sys}\sc.exe"; Parameters: "delete {#ServiceName}"; Flags: runhidden waituntilterminated; RunOnceId: "DeleteService"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Enshrouded Manager (web)"""; Flags: runhidden waituntilterminated; RunOnceId: "DelWebRule"
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Enshrouded Server (EnshroudedManager)"""; Flags: runhidden waituntilterminated; RunOnceId: "DelGameRule"
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM EnshroudedManager.Desktop.exe"; Flags: runhidden waituntilterminated; RunOnceId: "KillDesktop"
 
 [Code]
@@ -156,7 +155,7 @@ var
   ServerDirPage: TInputDirWizardPage;
   UiPage: TInputQueryWizardPage;
   GamePage: TInputQueryWizardPage;
-  UninstallServerDir: String;
+  UninstallServerDirs: String;
 
 { ---------- helpers ---------- }
 
@@ -255,6 +254,23 @@ end;
 function ServiceExists(): Boolean;
 begin
   Result := RegKeyExists(HKLM, 'SYSTEM\CurrentControlSet\Services\{#ServiceName}');
+end;
+
+function StringToLines(const S: String): TArrayOfString;
+var
+  Rest: String;
+  P, N: Integer;
+begin
+  Rest := S;
+  N := 0;
+  while Rest <> '' do
+  begin
+    P := Pos(#13#10, Rest);
+    SetArrayLength(Result, N + 1);
+    if P = 0 then begin Result[N] := Rest; Rest := ''; end
+    else begin Result[N] := Copy(Rest, 1, P - 1); Rest := Copy(Rest, P + 2, MaxInt); end;
+    N := N + 1;
+  end;
 end;
 
 { ---------- wizard ---------- }
@@ -442,12 +458,23 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  DataDir: String;
+  DataDir, ListFile: String;
+  Dirs: TArrayOfString;
+  I, Code: Integer;
 begin
   DataDir := ExpandConstant('{app}\data');
   if CurUninstallStep = usUninstall then
-    { Read before the files go away. }
-    UninstallServerDir := ReadJsonValue(DataDir + '\manager.json', 'InstallDir');
+  begin
+    { Before the files go away: the service removes the firewall rules of every instance and lists their server folders. }
+    ListFile := ExpandConstant('{tmp}\server-dirs.txt');
+    Exec(ExpandConstant('{app}\EnshroudedManager.Service.exe'), '--uninstall-cleanup "' + ListFile + '"', '', SW_HIDE, ewWaitUntilTerminated, Code);
+    if LoadStringsFromFile(ListFile, Dirs) then
+      for I := 0 to GetArrayLength(Dirs) - 1 do
+        if Trim(Dirs[I]) <> '' then
+          UninstallServerDirs := UninstallServerDirs + Trim(Dirs[I]) + #13#10;
+    if UninstallServerDirs = '' then
+      UninstallServerDirs := ReadJsonValue(DataDir + '\manager.json', 'InstallDir');
+  end;
 
   if CurUninstallStep = usPostUninstall then
   begin
@@ -455,9 +482,14 @@ begin
     DelTree(ExpandConstant('{app}\steamcmd'), True, True, True);
     if DirExists(DataDir) and (MsgBox(CustomMessage('DeleteData'), mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES) then
       DelTree(DataDir, True, True, True);
-    if (UninstallServerDir <> '') and DirExists(UninstallServerDir) and
-       (MsgBox(FmtMessage(CustomMessage('DeleteServer'), [UninstallServerDir]), mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES) then
-      DelTree(UninstallServerDir, True, True, True);
+    if (Trim(UninstallServerDirs) <> '') and
+       (MsgBox(FmtMessage(CustomMessage('DeleteServer'), [Trim(UninstallServerDirs)]), mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES) then
+    begin
+      Dirs := StringToLines(UninstallServerDirs);
+      for I := 0 to GetArrayLength(Dirs) - 1 do
+        if (Trim(Dirs[I]) <> '') and DirExists(Trim(Dirs[I])) then
+          DelTree(Trim(Dirs[I]), True, True, True);
+    end;
     RemoveDir(ExpandConstant('{app}'));
   end;
 end;

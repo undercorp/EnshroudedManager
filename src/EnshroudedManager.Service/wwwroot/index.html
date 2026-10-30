@@ -22,12 +22,14 @@
 
   <header>
     <div class="brand"><img class="logo" src="icon.png" alt=""> <span id="server-name">Enshrouded</span></div>
+    <select id="instance-select" class="hidden" aria-label="Instance"></select>
     <span class="pill" id="state-pill">…</span>
     <span class="busy hidden" id="busy"></span>
     <progress class="hidden" id="progress" max="100"></progress>
     <nav id="tabs">
       <button data-tab="dashboard" class="active">Tableau de bord</button>
       <button data-tab="config">Paramètres</button>
+      <button data-tab="depot" class="hidden">Dépôt</button>
       <button data-tab="backups">Sauvegardes</button>
       <button data-tab="logs">Journal</button>
       <button data-tab="tool">Outil</button>
@@ -73,6 +75,32 @@
       </div>
     </section>
 
+    <section id="tab-depot" class="tab hidden">
+      <div class="grid stats">
+        <div class="card stat"><div class="k">Monde modèle</div><div class="v" id="d-master">—</div><div class="sub" id="d-master-time"></div></div>
+        <div class="card stat"><div class="k">Dernier reset</div><div class="v" id="d-last">—</div><div class="sub"></div></div>
+        <div class="card stat"><div class="k">Prochain reset</div><div class="v" id="d-next">—</div><div class="sub" id="d-next-sub"></div></div>
+      </div>
+      <div class="card">
+        <h2>Dépôt de ressources</h2>
+        <p class="muted">Le monde est remis à l'identique du monde modèle à intervalle régulier : les visiteurs peuvent vider les coffres, tout revient au reset suivant.</p>
+        <div class="actions">
+          <button class="btn" id="depot-reset">Reset maintenant</button>
+          <button class="btn" id="depot-from-current">Définir le monde actuel comme modèle</button>
+          <label class="btn">Importer un monde (.zip)<input type="file" id="depot-import" accept=".zip" class="hidden"></label>
+        </div>
+        <div class="result" id="depot-result"></div>
+        <p class="muted">Archive acceptée : le dossier savegame d'un serveur (world0.ksd) ou les fichiers d'un monde solo (Steam\userdata\…\1203620\remote). Un seul monde par archive.</p>
+      </div>
+      <form class="card" id="depot-form">
+        <h2>Réglages du dépôt</h2>
+        <label class="row"><span>Reset automatique</span><input type="checkbox" id="depot-enabled"></label>
+        <label class="row"><span>Toutes les (minutes)</span><input type="number" id="depot-every" min="5" max="1440"></label>
+        <label class="row"><span>Seulement si personne n'est connecté</span><input type="checkbox" id="depot-empty"></label>
+        <div class="actions"><button class="btn primary" type="submit">Enregistrer</button></div>
+      </form>
+    </section>
+
     <section id="tab-backups" class="tab hidden">
       <div class="card">
         <h2>Sauvegardes du monde</h2>
@@ -99,6 +127,26 @@
         <label class="row"><span>Langue</span><select id="set-lang"><option value="fr">Français</option><option value="en">English</option></select></label>
         <div class="actions"><button class="btn primary" type="submit">Enregistrer</button></div>
         <div class="result" id="settings-result"></div>
+      </form>
+      <div class="card">
+        <h2>Instances</h2>
+        <p class="muted">Chaque instance est un serveur Enshrouded séparé (dossier, monde, port et réglages propres), mis à jour en même temps que les autres.</p>
+        <table class="table"><thead><tr><th>Nom</th><th>Port</th><th>Dossier</th><th></th></tr></thead><tbody id="instance-list"></tbody></table>
+      </div>
+      <form class="card" id="instance-form">
+        <h2>Ajouter une instance</h2>
+        <label class="row"><span>Nom</span><input type="text" id="ni-name" required value="Resource Depot"></label>
+        <label class="row"><span>Dossier du serveur</span><input type="text" id="ni-dir" required></label>
+        <label class="row"><span>Port de requête (UDP)</span><input type="number" id="ni-port" min="1024" max="65535" required></label>
+        <label class="row"><span>Joueurs max</span><input type="number" id="ni-slots" min="1" max="16" value="16" required></label>
+        <label class="row"><span>Mot de passe administrateur</span><input type="password" id="ni-admin" required autocomplete="new-password"></label>
+        <label class="row"><span>Mot de passe visiteurs (vide = public)</span><input type="password" id="ni-visitor" autocomplete="new-password"></label>
+        <label class="row"><span>Mode dépôt de ressources</span><input type="checkbox" id="ni-depot" checked></label>
+        <label class="row"><span>Reset toutes les (minutes)</span><input type="number" id="ni-every" min="5" max="1440" value="30"></label>
+        <label class="row"><span>Seulement si personne n'est connecté</span><input type="checkbox" id="ni-empty"></label>
+        <p class="muted">Le serveur (environ 8 Go) est téléchargé depuis Steam dans ce dossier, puis démarré. Pensez à rediriger le port UDP sur votre box.</p>
+        <div class="actions"><button class="btn primary" type="submit">Créer l'instance</button></div>
+        <div class="result" id="instance-result"></div>
       </form>
       <form class="card" id="password-form">
         <h2>Mot de passe de l'interface</h2>

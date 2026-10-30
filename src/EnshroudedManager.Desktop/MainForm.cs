@@ -17,6 +17,12 @@ public class MainForm : Form
     private readonly Label _name = new() { AutoSize = true, Font = new Font("Segoe UI Semibold", 14f), Margin = new Padding(0, 0, 12, 0) };
     private readonly Label _state = new() { AutoSize = true, Font = new Font("Segoe UI Semibold", 11f), Margin = new Padding(0, 4, 12, 0) };
     private readonly Label _busy = new() { AutoSize = true, ForeColor = Ui.Warn, Margin = new Padding(0, 6, 0, 0) };
+    private readonly ComboBox _instance = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200, Visible = false, Margin = new Padding(0, 4, 12, 0) };
+    private readonly TabControl _tabs = new() { Dock = DockStyle.Fill, Padding = new Point(14, 5) };
+    private readonly DepotPanel _depot = new() { Dock = DockStyle.Fill, AutoScroll = true };
+    private readonly TabPage _depotPage = new(L.T("Dépôt", "Depot"));
+    private InstanceDto[] _instances = [];
+    private bool _fillingInstances;
 
     // dashboard
     private readonly Label _sState = Value(), _sPlayers = Value(), _sLocal = Value(), _sAuto = Value();
@@ -51,9 +57,10 @@ public class MainForm : Form
         StartPosition = FormStartPosition.CenterScreen;
 
         var header = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(14, 10, 14, 8), WrapContents = false };
-        header.Controls.AddRange([_name, _state, _busy, _progress]);
+        header.Controls.AddRange([_name, _instance, _state, _busy, _progress]);
 
-        var tabs = new TabControl { Dock = DockStyle.Fill, Padding = new Point(14, 5) };
+        var tabs = _tabs;
+        _depotPage.Controls.Add(_depot);
         tabs.TabPages.Add(BuildDashboard());
         var configPage = new TabPage(L.T("Paramètres", "Settings"));
         configPage.Controls.Add(_config);
@@ -67,12 +74,17 @@ public class MainForm : Form
         {
             if (tabs.SelectedTab?.Text == L.T("Sauvegardes", "Backups")) await LoadBackupsAsync();
             if (tabs.SelectedTab?.Text == L.T("Outil", "Tool")) await LoadToolSettingsAsync();
+            if (tabs.SelectedTab == _depotPage) await _depot.LoadAsync();
         };
         Controls.Add(tabs);
         Controls.Add(header);
 
         _config.Attach(_api);
         _config.Applied += m => { _actionResult.Text = m; _ = PollAsync(); };
+        _depot.Attach(_api);
+        _depot.Changed += () => _ = PollAsync();
+        _instance.SelectedIndexChanged += async (_, _) => await SelectInstanceAsync();
+        _api.Instance = _settings.Instance;
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(L.T("Ouvrir", "Open"), null, (_, _) => ShowWindow());
@@ -92,7 +104,7 @@ public class MainForm : Form
         };
         FormClosing += (_, e) =>
         {
-            // Closing the window only hides it (unsaved edits are kept); L.T("Quitter", "Exit") in the tray menu exits.
+            // Closing the window only hides it (unsaved edits are kept); "Quitter" in the tray menu exits.
             if (!_exiting && e.CloseReason == CloseReason.UserClosing)
             {
                 e.Cancel = true;
@@ -281,14 +293,63 @@ public class MainForm : Form
         catch (Exception ex) { _actionResult.Text = ex.Message; }
     }
 
+    private async Task RefreshInstancesAsync()
+    {
+        _instances = await _api.Get<InstanceDto[]>("instances");
+        if (!_instances.Any(i => i.Id == _api.Instance)) _api.Instance = "main";
+        _instance.Visible = _instances.Length > 1;
+        var names = _instances.Select(i => i.Name).ToArray();
+        if (!_instance.Items.Cast<string>().SequenceEqual(names))
+        {
+            _fillingInstances = true;
+            _instance.Items.Clear();
+            _instance.Items.AddRange(names);
+            _fillingInstances = false;
+        }
+        var index = Array.FindIndex(_instances, i => i.Id == _api.Instance);
+        if (_instance.SelectedIndex != index) { _fillingInstances = true; _instance.SelectedIndex = index; _fillingInstances = false; }
+    }
+
+    /// <summary>Every tab follows the instance picked in the header.</summary>
+    private async Task SelectInstanceAsync()
+    {
+        if (_fillingInstances || _instance.SelectedIndex < 0) return;
+        var id = _instances[_instance.SelectedIndex].Id;
+        if (id == _api.Instance) return;
+        if (_config.Dirty && !Ui.Confirm(this, L.T("Modifications non enregistrées : les abandonner ?", "Unsaved changes: discard them?")))
+        {
+            _fillingInstances = true;
+            _instance.SelectedIndex = Array.FindIndex(_instances, i => i.Id == _api.Instance);
+            _fillingInstances = false;
+            return;
+        }
+        _api.Instance = id;
+        _settings.Instance = id;
+        _settings.Save();
+        try { await _config.LoadAsync(); } catch (Exception ex) { _actionResult.Text = ex.Message; }
+        if (_tabs.SelectedTab?.Text == L.T("Sauvegardes", "Backups")) await LoadBackupsAsync();
+        await PollAsync();
+        if (_tabs.SelectedTab == _depotPage) await _depot.LoadAsync();
+    }
+
+    private void ShowDepotTab(bool show)
+    {
+        var shown = _tabs.TabPages.Contains(_depotPage);
+        if (show && !shown) _tabs.TabPages.Insert(2, _depotPage);
+        if (!show && shown) _tabs.TabPages.Remove(_depotPage);
+    }
+
     private async Task PollAsync()
     {
         if (_polling) return;
         _polling = true;
         try
         {
+            await RefreshInstancesAsync();
             _status = await _api.Get<StatusDto>("status");
             ShowStatus(_status);
+            ShowDepotTab(_status.IsDepot);
+            _depot.SetBusy(_status.Busy != null);
             if (_status.LastLogId != _lastLogId) await LoadLogsAsync();
             await _config.OnRemoteVersionAsync(_status.ConfigVersion);
         }
@@ -465,7 +526,9 @@ public class MainForm : Form
         _settings.ServerUrl = _api.BaseUrl;
         _settings.Token = _api.Token;
         _settings.Save();
+        _api.Instance = _settings.Instance;
         _config.Attach(_api);
+        _depot.Attach(_api);
         await _config.LoadAsync();
         _timer.Start();
     }

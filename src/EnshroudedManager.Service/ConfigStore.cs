@@ -102,11 +102,11 @@ public class ConfigStore
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    private readonly SettingsStore _settings;
+    private readonly Instance _instance;
 
-    public ConfigStore(SettingsStore settings) => _settings = settings;
+    public ConfigStore(Instance instance) => _instance = instance;
 
-    private string FilePath => _settings.Current.ConfigPath;
+    private string FilePath => _instance.ConfigPath;
 
     public long Version => File.Exists(FilePath) ? File.GetLastWriteTimeUtc(FilePath).Ticks : 0;
 

@@ -39,7 +39,28 @@ public record StatusDto(
     double? Progress,
     bool AutoUpdate,
     long ConfigVersion,
-    long LastLogId);
+    long LastLogId,
+    string InstanceId,
+    string InstanceName,
+    bool IsDepot,
+    DateTimeOffset? NextReset);
+
+/// <summary>Entry of the instance selector.</summary>
+public record InstanceDto(string Id, string Name, bool IsMain, bool Depot, ServerState State, string StateLabel,
+    PlayersDto? Players, int QueryPort, string InstallDir);
+
+public record DepotDto(bool Enabled, int ResetEveryMinutes, bool OnlyWhenEmpty, DateTimeOffset? LastReset,
+    DateTimeOffset? NextReset, bool HasMaster, DateTimeOffset? MasterTime);
+
+public record DepotSettingsDto(bool Enabled, int ResetEveryMinutes, bool OnlyWhenEmpty);
+
+/// <summary>Request to add an instance (from the web page or the desktop app).</summary>
+public record CreateInstanceDto(
+    string Name, string InstallDir, int QueryPort, int SlotCount, string AdminPassword, string VisitorPassword,
+    bool Depot, int ResetEveryMinutes, bool OnlyWhenEmpty);
+
+/// <summary>Defaults proposed in the "new instance" form.</summary>
+public record NewInstanceDefaultsDto(string InstallDir, int QueryPort);
 
 public record LogEntryDto(long Id, DateTimeOffset Time, string Level, string Message);
 

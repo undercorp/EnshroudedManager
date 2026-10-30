@@ -8,27 +8,30 @@ namespace EnshroudedManager.Service;
 public class BackupStore
 {
     private const string ConfigEntry = "enshrouded_server.json";
-    private readonly SettingsStore _settings;
-    private readonly LogBuffer _log;
+    private readonly Instance _instance;
 
-    public BackupStore(SettingsStore settings, LogBuffer log)
+    public BackupStore(Instance instance) => _instance = instance;
+
+    private ILog _log => _instance.Log;
+
+    public string Dir
     {
-        _settings = settings;
-        _log = log;
-        Directory.CreateDirectory(Dir);
+        get
+        {
+            var dir = Path.Combine(_instance.DataDir, "backups");
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
     }
-
-    public string Dir => Path.Combine(_settings.DataDir, "backups");
 
     /// <summary>Save directory as configured in enshrouded_server.json (relative to the install dir).</summary>
     public string SaveDir
     {
         get
         {
-            var s = _settings.Current;
             string? rel = null;
-            try { rel = JsonNode.Parse(File.ReadAllText(s.ConfigPath))?["saveDirectory"]?.ToString(); } catch { }
-            return Path.GetFullPath(Path.Combine(s.InstallDir, string.IsNullOrWhiteSpace(rel) ? "savegame" : rel));
+            try { rel = JsonNode.Parse(File.ReadAllText(_instance.ConfigPath))?["saveDirectory"]?.ToString(); } catch { }
+            return Path.GetFullPath(Path.Combine(_instance.InstallDir, string.IsNullOrWhiteSpace(rel) ? "savegame" : rel));
         }
     }
 
@@ -61,9 +64,9 @@ public class BackupStore
                 zip.CreateEntryFromFile(file, "savegame/" + Path.GetRelativePath(saveDir, file).Replace('\\', '/'), CompressionLevel.Optimal);
                 expected++;
             }
-            if (File.Exists(_settings.Current.ConfigPath))
+            if (File.Exists(_instance.ConfigPath))
             {
-                zip.CreateEntryFromFile(_settings.Current.ConfigPath, ConfigEntry);
+                zip.CreateEntryFromFile(_instance.ConfigPath, ConfigEntry);
                 expected++;
             }
         }
@@ -84,7 +87,7 @@ public class BackupStore
 
     private void Prune()
     {
-        var keep = Math.Max(3, _settings.Current.BackupsToKeep);
+        var keep = Math.Max(3, _instance.Global.BackupsToKeep);
         foreach (var old in new DirectoryInfo(Dir).GetFiles("*.zip").OrderByDescending(f => f.Name).Skip(keep))
         {
             try { old.Delete(); _log.Info(L.T($"Ancienne sauvegarde supprimée : {old.Name}", $"Old backup deleted: {old.Name}")); } catch { }
@@ -110,7 +113,7 @@ public class BackupStore
                 e.ExtractToFile(target, true);
             }
             if (includeConfig && zip.GetEntry(ConfigEntry) is { } cfg)
-                cfg.ExtractToFile(_settings.Current.ConfigPath, true);
+                cfg.ExtractToFile(_instance.ConfigPath, true);
         }
 
         var old = saveDir + ".old";

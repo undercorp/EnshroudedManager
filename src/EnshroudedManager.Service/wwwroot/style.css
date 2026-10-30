@@ -129,3 +129,6 @@ dialog ul { padding-left: 18px; margin: 6px 0; }
 
 #progress { width: 180px; height: 8px; accent-color: var(--accent); }
 .notice { color: var(--muted); padding: 24px; text-align: center; }
+#instance-select { max-width: 220px; }
+label.btn { display: inline-flex; align-items: center; }
+#instance-list .pill { margin-left: 6px; }
